@@ -1,0 +1,84 @@
+# ── 1. Enable STRICT mTLS across the namespace ────────────────
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: production
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# ── 2. Only allow web service to call api service ─────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: api-access
+  namespace: production
+spec:
+  selector:
+    matchLabels:
+      app: api
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/production/sa/web-service-account"
+
+---
+# ── 3. Deny all traffic not explicitly allowed ────────────────
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+  namespace: production
+spec: {}
+
+---
+# ── 4. VirtualService: canary traffic split ───────────────────
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: myapp
+  namespace: production
+spec:
+  hosts:
+    - myapp
+  http:
+    - route:
+        - destination:
+            host: myapp
+            subset: v1-stable
+          weight: 90
+        - destination:
+            host: myapp
+            subset: v2-canary
+          weight: 10
+
+---
+# ── 5. DestinationRule: subsets + TLS mode ────────────────────
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: myapp
+  namespace: production
+spec:
+  host: myapp
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+    connectionPool:
+      http:
+        h2UpgradePolicy: UPGRADE
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+  subsets:
+    - name: v1-stable
+      labels:
+        version: v1
+    - name: v2-canary
+      labels:
+        version: v2
